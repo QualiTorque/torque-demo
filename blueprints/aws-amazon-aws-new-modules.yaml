@@ -1,0 +1,89 @@
+spec_version: 2
+description: Create free AWS resources (VPC, NACL, egress-only IGW, placement group, launch template, RDS parameter groups) with amazon.aws modules that do not exist in amazon.aws 7.3.0. Fails on agents with amazon.aws <= 7.3.0.
+
+metadata:
+  self-service: true
+  display-name: AWS amazon.aws New Modules
+
+inputs:
+  agent:
+    type: agent
+    description: Torque agent used to run the Ansible grain. Its AWS identity is used for all API calls.
+  aws_region:
+    type: string
+    default: eu-west-1
+    description: AWS region to create the resources in.
+  vpc_cidr:
+    type: string
+    default: 10.90.0.0/16
+    description: CIDR block of the VPC that holds the network ACL and egress-only internet gateway.
+  instance_type:
+    type: string
+    default: t3.micro
+    description: Instance type set in the launch template (no instance is launched).
+  pg_family:
+    type: string
+    default: postgres16
+    description: RDS instance parameter group family.
+  aurora_family:
+    type: string
+    default: aurora-postgresql16
+    description: RDS cluster parameter group family.
+
+outputs:
+  vpc_id:
+    value: '{{ .grains.aws_resources.outputs.vpc_id }}'
+  nacl_id:
+    value: '{{ .grains.aws_resources.outputs.nacl_id }}'
+  egress_igw_id:
+    value: '{{ .grains.aws_resources.outputs.egress_igw_id }}'
+  placement_group_name:
+    value: '{{ .grains.aws_resources.outputs.placement_group_name }}'
+  launch_template_id:
+    value: '{{ .grains.aws_resources.outputs.launch_template_id }}'
+  db_param_group_name:
+    value: '{{ .grains.aws_resources.outputs.db_param_group_name }}'
+  db_cluster_param_group_name:
+    value: '{{ .grains.aws_resources.outputs.db_cluster_param_group_name }}'
+
+grains:
+  aws_resources:
+    kind: ansible
+    spec:
+      source:
+        store: torque-demo
+        path: ansible/aws/amazon-aws-new-modules/playbook.yaml
+      agent:
+        name: '{{ .inputs.agent }}'
+      inventory-file:
+        localhost:
+          hosts:
+            127.0.0.1:
+              ansible_connection: local
+      inputs:
+        - name_prefix: 'aws9-{{ envId | downcase }}'
+        - aws_region: '{{ .inputs.aws_region }}'
+        - vpc_cidr: '{{ .inputs.vpc_cidr }}'
+        - instance_type: '{{ .inputs.instance_type }}'
+        - pg_family: '{{ .inputs.pg_family }}'
+        - aurora_family: '{{ .inputs.aurora_family }}'
+      outputs:
+        - vpc_id
+        - nacl_id
+        - egress_igw_id
+        - placement_group_name
+        - launch_template_id
+        - db_param_group_name
+        - db_cluster_param_group_name
+      on-destroy:
+        source:
+          store: torque-demo
+          path: ansible/aws/amazon-aws-new-modules/teardown.yaml
+        inputs:
+          - name_prefix: 'aws9-{{ envId | downcase }}'
+          - aws_region: '{{ .inputs.aws_region }}'
+        inventory-file:
+          localhost:
+            hosts:
+              127.0.0.1:
+                ansible_connection: local

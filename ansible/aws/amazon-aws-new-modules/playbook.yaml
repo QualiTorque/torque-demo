@@ -1,0 +1,147 @@
+---
+# ansible/aws/amazon-aws-new-modules/playbook.yaml
+#
+# Creates AWS resources using amazon.aws modules that do NOT exist in
+# amazon.aws <= 7.3.0. Running this with 7.3.0 installed fails with
+# "couldn't resolve module/action". Requires amazon.aws >= 9.0.0.
+#
+#   Module                              First in amazon.aws
+#   amazon.aws.rds_instance_param_group 8.0.0
+#   amazon.aws.rds_cluster_param_group  8.0.0
+#   amazon.aws.ec2_placement_group      9.0.0
+#   amazon.aws.ec2_launch_template      9.0.0
+#   amazon.aws.ec2_vpc_nacl             9.0.0
+#   amazon.aws.ec2_vpc_egress_igw       9.0.0
+#
+# All resources are free of charge (no instances, gateways or hosts that bill).
+# AWS credentials come from the environment (agent IAM role / env vars / profile).
+#
+# Expected host groups: none (runs on localhost)
+#
+# Grain inputs (extra-vars):
+#   name_prefix   (default: 'torque-aws9')   - Prefix for all resource names
+#   aws_region    (default: 'eu-west-1')     - AWS region
+#   vpc_cidr      (default: '10.90.0.0/16')  - CIDR of the VPC created for NACL / EIGW
+#   instance_type (default: 't3.micro')      - Instance type set in the launch template
+#   pg_family     (default: 'postgres16')    - RDS instance parameter group family
+#   aurora_family (default: 'aurora-postgresql16') - RDS cluster parameter group family
+#
+# Outputs:
+#   vpc_id, nacl_id, egress_igw_id, placement_group_name, launch_template_id,
+#   db_param_group_name, db_cluster_param_group_name
+
+- name: Create AWS resources only available in amazon.aws > 7.3.0
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    prefix: "{{ name_prefix | default('torque-aws9') }}"
+    cidr: "{{ vpc_cidr | default('10.90.0.0/16') }}"
+    lt_instance_type: "{{ instance_type | default('t3.micro') }}"
+    db_family: "{{ pg_family | default('postgres16') }}"
+    cluster_family: "{{ aurora_family | default('aurora-postgresql16') }}"
+    common_tags:
+      Name: "{{ prefix }}"
+      ManagedBy: torque-ansible
+    aws_auth: &aws_auth
+      region: "{{ aws_region | default('eu-west-1') }}"
+
+  tasks:
+    # --- Network (VPC itself uses a long-standing module) -------------------
+    - name: Create VPC
+      amazon.aws.ec2_vpc_net:
+        <<: *aws_auth
+        name: "{{ prefix }}-vpc"
+        cidr_block: "{{ cidr }}"
+        tags: "{{ common_tags }}"
+        state: present
+      register: vpc
+      tags: [network, vpc]
+
+    - name: Create network ACL (amazon.aws >= 9.0.0)
+      amazon.aws.ec2_vpc_nacl:
+        <<: *aws_auth
+        vpc_id: "{{ vpc.vpc.id }}"
+        name: "{{ prefix }}-nacl"
+        ingress:
+          - [100, 'tcp', 'allow', "{{ cidr }}", null, null, 22, 22]
+          - [200, 'tcp', 'allow', '0.0.0.0/0', null, null, 443, 443]
+        egress:
+          - [100, 'all', 'allow', '0.0.0.0/0', null, null, null, null]
+        tags: "{{ common_tags }}"
+        state: present
+      register: nacl
+      tags: [network, nacl]
+
+    - name: Create egress-only internet gateway (amazon.aws >= 9.0.0)
+      amazon.aws.ec2_vpc_egress_igw:
+        <<: *aws_auth
+        vpc_id: "{{ vpc.vpc.id }}"
+        tags: "{{ common_tags }}"
+        state: present
+      register: eigw
+      tags: [network, eigw]
+
+    # --- Compute ------------------------------------------------------------
+    - name: Create spread placement group (amazon.aws >= 9.0.0)
+      amazon.aws.ec2_placement_group:
+        <<: *aws_auth
+        name: "{{ prefix }}-pg"
+        strategy: spread
+        tags: "{{ common_tags }}"
+        state: present
+      register: placement_group
+      tags: [compute, placement_group]
+
+    - name: Create launch template (amazon.aws >= 9.0.0)
+      amazon.aws.ec2_launch_template:
+        <<: *aws_auth
+        name: "{{ prefix }}-lt"
+        instance_type: "{{ lt_instance_type }}"
+        placement:
+          group_name: "{{ placement_group.placement_group.name }}"
+        tags: "{{ common_tags }}"
+        state: present
+      register: launch_template
+      tags: [compute, launch_template]
+
+    # --- Database -----------------------------------------------------------
+    - name: Create RDS instance parameter group (amazon.aws >= 8.0.0)
+      amazon.aws.rds_instance_param_group:
+        <<: *aws_auth
+        name: "{{ prefix }}-db-params"
+        description: "{{ prefix }} instance parameter group"
+        engine: "{{ db_family }}"
+        params:
+          log_min_duration_statement: "1000"
+        tags: "{{ common_tags }}"
+        state: present
+      register: db_params
+      tags: [database, rds_params]
+
+    - name: Create RDS cluster parameter group (amazon.aws >= 8.0.0)
+      amazon.aws.rds_cluster_param_group:
+        <<: *aws_auth
+        name: "{{ prefix }}-cluster-params"
+        description: "{{ prefix }} cluster parameter group"
+        db_parameter_group_family: "{{ cluster_family }}"
+        tags: "{{ common_tags }}"
+        state: present
+      register: cluster_params
+      tags: [database, rds_cluster_params]
+
+    - name: Export outputs to Torque
+      torque.collections.export_torque_outputs:
+        outputs:
+          vpc_id: "{{ vpc.vpc.id | default('') }}"
+          nacl_id: "{{ nacl.nacl_id | default('') }}"
+          egress_igw_id: "{{ eigw.gateway_id | default('') }}"
+          placement_group_name: "{{ placement_group.placement_group.name | default('') }}"
+          launch_template_id: "{{ launch_template.template.launch_template_id | default('') }}"
+          db_param_group_name: "{{ db_params.db_parameter_group_name | default('') }}"
+          db_cluster_param_group_name: "{{ prefix }}-cluster-params"
+      delegate_to: localhost
+      run_once: true
+      tags: always
+      ignore_errors: true
