@@ -65,12 +65,23 @@
             state: absent
           tags: [eigw]
 
-        - name: Delete network ACL
+        - name: Look up non-default network ACLs in the VPC
+          amazon.aws.ec2_vpc_nacl_info:
+            <<: *aws_auth
+            filters:
+              vpc-id: "{{ vpc_id }}"
+              default: "false"
+          register: nacl_info
+          tags: [nacl]
+
+        - name: Delete network ACLs
           amazon.aws.ec2_vpc_nacl:
             <<: *aws_auth
-            vpc_id: "{{ vpc_id }}"
-            name: "{{ prefix }}-nacl"
+            nacl_id: "{{ item.nacl_id }}"
             state: absent
+          loop: "{{ nacl_info.nacls }}"
+          loop_control:
+            label: "{{ item.nacl_id }}"
           tags: [nacl]
 
         - name: Delete VPC

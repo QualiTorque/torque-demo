@@ -41,9 +41,10 @@
     lt_instance_type: "{{ instance_type | default('t3.micro') }}"
     db_family: "{{ pg_family | default('postgres16') }}"
     cluster_family: "{{ aurora_family | default('aurora-postgresql16') }}"
+    # No Name key here: modules like ec2_vpc_nacl let tags.Name override 'name'
     common_tags:
-      Name: "{{ prefix }}"
       ManagedBy: torque-ansible
+      TorquePrefix: "{{ prefix }}"
     aws_auth: &aws_auth
       region: "{{ aws_region | default('eu-west-1') }}"
 
@@ -78,7 +79,7 @@
       amazon.aws.ec2_vpc_egress_igw:
         <<: *aws_auth
         vpc_id: "{{ vpc.vpc.id }}"
-        tags: "{{ common_tags }}"
+        tags: "{{ common_tags | combine({'Name': prefix ~ '-eigw'}) }}"
         state: present
       register: eigw
       tags: [network, eigw]
